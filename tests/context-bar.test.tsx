@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { cells, legend, share, toReading, tokens } from '../hooks/register'
 
@@ -160,15 +160,51 @@ describe('context-bar', () => {
     await band.unmount()
   })
 
-  test('refreshes after a compaction', async ($, on) => {
-    const { asked } = engine(on)
+  // Like Claude Code: a command or compaction that swaps the transcript resolves first, and the
+  // new transcript is installed only afterwards, so the estimate changes only then.
+  for (const swap of ['compact', 'clear', 'resume']) {
+    test(`/${swap} shows the new transcript once it is installed`, async ($, on) => {
+      const { live } = engine(on)
+      const clock = mock.clock(on)
+      on('command.run', () => ({ text: '' }))
+      await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+      await settle()
+      await $.command.run({ command: swap, args: '' } as any)
+      live.total = 16_000 // installed after the command resolved
+      await clock.advance(5_000)
+      const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
+      expect(await band.find({ type: 'Text', text: /16k of 1M/ })).toBeDefined()
+      await band.unmount()
+    })
+  }
+
+  test('an auto-compaction shows the compacted transcript once it is installed', async ($, on) => {
+    const { live } = engine(on)
+    const clock = mock.clock(on)
     on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }))
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
-    await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
-    await settle()
-    expect(asked.length).toBe(2)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
+    live.total = 30_000
+    await clock.advance(5_000)
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
+    expect(await band.find({ type: 'Text', text: /30k of 1M/ })).toBeDefined()
+    await band.unmount()
   })
+
+  // precompute installs nothing; a manual compaction is refreshed by its /compact command instead.
+  for (const trigger of ['precompute', 'manual']) {
+    test(`a ${trigger} compaction alone does not refresh`, async ($, on) => {
+      const { asked } = engine(on)
+      const clock = mock.clock(on)
+      on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }))
+      await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+      await settle()
+      await $.session.compact({ trigger, messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
+      await clock.advance(5_000)
+      expect(asked.length).toBe(1)
+    })
+  }
 
   test('/context-bar hides and shows it, and remembers the choice', async ($, on) => {
     const { store } = engine(on)
