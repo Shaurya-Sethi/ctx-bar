@@ -3,7 +3,8 @@
 //   draws them (system prompt, tools, MCP tools, memory files, skills, messages, free),
 //   with a legend of tokens and shares and where auto-compaction runs. It refreshes as the
 //   main conversation keeps each row (prompt, response, tool result, compaction), so it
-//   grows steadily within a turn. /context-bar shows or hides it, and the choice is kept
+//   grows steadily within a turn, and again once /clear, /compact or /resume has installed
+//   the new transcript. /context-bar shows or hides it, and the choice is kept
 //   across sessions.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -51,11 +52,22 @@ export const register: Register = on => {
     return r
   })
 
+  // /clear, /compact and /resume swap the transcript without a turn ending. The command resolves
+  // before Claude Code installs the new transcript, so the refresh waits past the install.
+  on('command.run', { command: ['clear', 'compact', 'resume'] }, async ($, e, next) => {
+    const r = await next(e)
+    refreshAfterSwap($)
+    return r
+  }).catch(($, e, next) => next(e))
+
+  // Best effort for auto-compaction, which runs no command: an organization's managed settings
+  // may keep this hook from running in an installed plugin, and appended rows then cover it.
+  // `precompute` installs nothing; a subagent compacts its own window.
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId && 'messages' in r) void scheduleRefresh($) // a /compact empties the window without a turn ending
+    if (!e.agentId && e.trigger !== 'precompute' && 'messages' in r) refreshAfterSwap($)
     return r
-  })
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'context-bar' }, async $ => {
     const hidden = await update($, isHidden, h => !h)
@@ -134,6 +146,16 @@ function scheduleRefresh($: EngineInterface): Promise<void> {
     running = undefined
   })()
   return running
+}
+
+// A swapped transcript is installed only after the chain announcing the swap (command.run,
+// session.compact) resolves, so a refresh there still measures the old one. This re-reads on a
+// few timers past that point: bounded, each a local estimate, coalesced by scheduleRefresh.
+// Timers rather than sleeps, as the hook's dispatch ends before they fire; a refused timer
+// only loses that one re-read.
+const AFTER_SWAP_MS = [50, 500, 2000]
+function refreshAfterSwap($: EngineInterface) {
+  for (const ms of AFTER_SWAP_MS) $.clock.after(ms, () => void scheduleRefresh($))
 }
 
 // Asks the engine for /context's breakdown, estimated locally (no token-count calls).
