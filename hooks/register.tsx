@@ -19,6 +19,10 @@ const MESSAGES = '#d97757' // the row that grows, in the accent color
 const FREE = '#808080' // a mid grey thin line reads as empty on dark and light themes alike
 const BUFFER = '#808080'
 const GLYPH = { used: '█', free: '─', buffer: '░' } as const
+// An appended row reaches the in-memory transcript one tick after its append resolves
+// (measured on Claude Code 2.1.300); a 1ms timer runs after that tick. Host scheduling does
+// not promise that, so a later re-read catches a slower install; scheduleRefresh coalesces both.
+const AFTER_APPEND_MS = [1, 250]
 
 // Held by the host, so the bar survives a hot reload of this file. The owner must be the
 // manifest's name ('ctx-bar'), written as a literal in each ref: `claude plugin validate`
@@ -36,13 +40,16 @@ export const register: Register = on => {
     return r
   })
 
-  // Every row the main conversation keeps changes what the window holds. The refresh runs in
-  // the background, so a slow estimate never holds up the append, and a failing hook still
-  // lets the row through (the handler replays what next settled to, or runs it).
+  // Every row the main conversation keeps changes what the window holds. The append resolves
+  // once the row is stored, but Claude Code installs it in the in-memory transcript the estimate
+  // reads only a tick later, so a refresh right here would measure the window one row behind.
+  // A timer past that tick waits for the install; it also keeps a slow estimate from holding up
+  // the append, and a failing hook still lets the row through (the handler replays what next
+  // settled to, or runs it).
   on('session.append', async ($, e, next) => {
     const r = await next(e)
     // A subagent's rows fill its own window; queue records and notices are never in the model's.
-    if (!e.agentId && e.door !== 'queue' && e.door !== 'notice') void scheduleRefresh($)
+    if (!e.agentId && e.door !== 'queue' && e.door !== 'notice') refreshAfter($, AFTER_APPEND_MS)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -56,7 +63,7 @@ export const register: Register = on => {
   // before Claude Code installs the new transcript, so the refresh waits past the install.
   on('command.run', { command: ['clear', 'compact', 'resume'] }, async ($, e, next) => {
     const r = await next(e)
-    refreshAfterSwap($)
+    refreshAfter($, AFTER_SWAP_MS)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -67,7 +74,7 @@ export const register: Register = on => {
   // next reply then refresh the bar instead.
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId && (e.trigger === 'auto' || e.trigger === 'plugin') && 'messages' in r) refreshAfterSwap($)
+    if (!e.agentId && (e.trigger === 'auto' || e.trigger === 'plugin') && 'messages' in r) refreshAfter($, AFTER_SWAP_MS)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -151,14 +158,16 @@ function scheduleRefresh($: EngineInterface): Promise<void> {
 }
 
 // A swapped transcript is installed only after the chain announcing the swap (command.run,
-// session.compact) resolves, so a refresh there still measures the old one. This re-reads on a
-// few timers past that point: bounded, each a local estimate, coalesced by scheduleRefresh.
-// Timers rather than sleeps, as the hook's dispatch ends before they fire; a refused timer
-// only loses that one re-read. The delays are a guess with no install event to wait on: an
-// install slower than the last one (a large /resume) leaves the bar stale until the next row.
+// session.compact) resolves, so a refresh there still measures the old one. The delays are a
+// guess with no install event to wait on: an install slower than the last one (a large
+// /resume) leaves the bar stale until the next row.
 const AFTER_SWAP_MS = [50, 500, 2000]
-function refreshAfterSwap($: EngineInterface) {
-  for (const ms of AFTER_SWAP_MS) $.clock.after(ms, () => void scheduleRefresh($))
+
+// Re-reads on a few timers, for a change Claude Code installs only after the announcing chain
+// resolves: bounded, each a local estimate, coalesced by scheduleRefresh. Timers rather than
+// sleeps, as the hook's dispatch ends before they fire; a refused timer only loses that re-read.
+function refreshAfter($: EngineInterface, delays: readonly number[]) {
+  for (const ms of delays) $.clock.after(ms, () => void scheduleRefresh($))
 }
 
 // Asks the engine for /context's breakdown, estimated locally (no token-count calls).

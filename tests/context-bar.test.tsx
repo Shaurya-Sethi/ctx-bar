@@ -120,30 +120,65 @@ describe('context-bar', () => {
     expect(asked.length).toBe(2)
   })
 
-  test('grows with each row the main conversation keeps, before the turn ends', async ($, on) => {
-    const { asked, live } = engine(on)
+  // Like Claude Code: an append resolves once the row is stored, and the in-memory transcript
+  // the estimate reads takes the row a tick later, so a refresh right at resolve reads the old total.
+  test('grows with each row the main conversation keeps, once it is installed, before the turn ends', async ($, on) => {
+    const { live } = engine(on)
+    const clock = mock.clock(on)
+    live.total = 18_000
+    on('session.append', async (_$: any, e: any, next: any) => {
+      const r = await next(e)
+      ;(globalThis as any).setTimeout(() => (live.total = 22_600), 0)
+      return r
+    })
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
-    live.total = 216_000
-    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'a row' }] } } as any)
-    await settle()
-    expect(asked.length).toBe(2)
     const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
-    expect(await band.find({ type: 'Text', text: /216k of 1M/ })).toBeDefined()
+    await $.session.append({ message: { type: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'output' }] } } as any)
+    await settle() // the row is installed by now; a refresh at resolve would have read 18k
+    await clock.advance(1) // the first re-read, right after the install tick
+    await settle()
+    expect(await band.find({ type: 'Text', text: /23k of 1M/ })).toBeDefined()
+    await band.unmount()
+  })
+
+  // Host scheduling does not promise the install lands within a tick; a later re-read catches it.
+  test('a row installed late still reaches the bar before the next row', async ($, on) => {
+    const { live } = engine(on)
+    const clock = mock.clock(on)
+    live.total = 18_000
+    on('session.append', async (_$: any, e: any, next: any) => {
+      const r = await next(e)
+      void clock.sleep(100).then(() => (live.total = 22_600))
+      return r
+    })
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+    await settle()
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
+    await $.session.append({ message: { type: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'output' }] } } as any)
+    await clock.advance(1)
+    await settle()
+    expect(await band.find({ type: 'Text', text: /18k of 1M/ })).toBeDefined() // not installed yet
+    await clock.advance(300)
+    await settle()
+    expect(await band.find({ type: 'Text', text: /23k of 1M/ })).toBeDefined()
     await band.unmount()
   })
 
   test('a row a subagent keeps does not refresh the bar', async ($, on) => {
     const { asked } = engine(on)
+    const clock = mock.clock(on)
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
     await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'a row' }] }, agentId: 'a1' } as any)
+    await clock.advance(100)
     await settle()
     expect(asked.length).toBe(1)
   })
 
   test('a burst of rows leaves the newest reading, not a slower older one', async ($, on) => {
     const { live } = engine(on)
+    const clock = mock.clock(on)
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
     let open!: () => void
@@ -151,10 +186,13 @@ describe('context-bar', () => {
     live.gate = new Promise<void>(done => (open = done)) // this read is slow
     const row = { message: { type: 'user', content: [{ type: 'text', text: 'a row' }] } } as any
     await $.session.append(row)
+    await clock.advance(1) // its refresh starts, and waits on the slow read
     live.total = 230_000
     live.gate = undefined // the next ones are fast, so without care they land before the slow one
     await $.session.append(row)
+    await clock.advance(1)
     await $.session.append(row)
+    await clock.advance(1)
     await settle()
     open() // the slow read answers last
     await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1 } as any) // resolves once the reading is current
