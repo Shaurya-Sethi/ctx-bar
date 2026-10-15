@@ -192,16 +192,19 @@ describe('context-bar', () => {
     await band.unmount()
   })
 
-  test('a precomputed compaction installs nothing, so it does not refresh', async ($, on) => {
-    const { asked } = engine(on)
-    const clock = mock.clock(on)
-    on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }))
-    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
-    await settle()
-    await $.session.compact({ trigger: 'precompute', messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
-    await clock.advance(5_000)
-    expect(asked.length).toBe(1)
-  })
+  // precompute installs nothing; a manual compaction is refreshed by its /compact command instead.
+  for (const trigger of ['precompute', 'manual']) {
+    test(`a ${trigger} compaction alone does not refresh`, async ($, on) => {
+      const { asked } = engine(on)
+      const clock = mock.clock(on)
+      on('session.compact', () => ({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] }))
+      await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+      await settle()
+      await $.session.compact({ trigger, messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as any)
+      await clock.advance(5_000)
+      expect(asked.length).toBe(1)
+    })
+  }
 
   test('/context-bar hides and shows it, and remembers the choice', async ($, on) => {
     const { store } = engine(on)

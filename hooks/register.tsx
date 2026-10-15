@@ -60,12 +60,14 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
-  // Best effort for auto-compaction, which runs no command: an organization's managed settings
-  // may keep this hook from running in an installed plugin, and appended rows then cover it.
-  // `precompute` installs nothing; a subagent compacts its own window.
+  // Best effort for compactions no command announces: auto-compaction and a plugin's own.
+  // A manual /compact is already covered by the command.run hook above, and `precompute`
+  // installs nothing; a subagent compacts its own window. An organization's managed settings
+  // may keep this hook from running in an installed plugin; the rows appended by the model's
+  // next reply then refresh the bar instead.
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId && e.trigger !== 'precompute' && 'messages' in r) refreshAfterSwap($)
+    if (!e.agentId && (e.trigger === 'auto' || e.trigger === 'plugin') && 'messages' in r) refreshAfterSwap($)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -152,7 +154,8 @@ function scheduleRefresh($: EngineInterface): Promise<void> {
 // session.compact) resolves, so a refresh there still measures the old one. This re-reads on a
 // few timers past that point: bounded, each a local estimate, coalesced by scheduleRefresh.
 // Timers rather than sleeps, as the hook's dispatch ends before they fire; a refused timer
-// only loses that one re-read.
+// only loses that one re-read. The delays are a guess with no install event to wait on: an
+// install slower than the last one (a large /resume) leaves the bar stale until the next row.
 const AFTER_SWAP_MS = [50, 500, 2000]
 function refreshAfterSwap($: EngineInterface) {
   for (const ms of AFTER_SWAP_MS) $.clock.after(ms, () => void scheduleRefresh($))
