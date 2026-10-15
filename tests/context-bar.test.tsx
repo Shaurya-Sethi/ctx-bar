@@ -87,7 +87,7 @@ describe('context-bar', () => {
     await settle()
     expect(asked).toEqual([{ breakdown: 'summary' }]) // estimated locally, never the token-count API
 
-    const band = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', ...BAND } as any)
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
     expect(await band.find({ type: 'Text', text: /204k of 1M · compacts at 950k/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: / 20% / })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /^messages $/ })).toBeDefined()
@@ -128,13 +128,13 @@ describe('context-bar', () => {
     await settle()
     expect((await $.command.run({ command: 'context-bar', args: '' } as any)).text).toMatch(/hidden/)
     expect(store.isHidden).toBe(true)
-    let band = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', ...BAND } as any)
+    let band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
     expect(await band.find({ type: 'Text', text: /of 1M/ })).toBeUndefined()
     await band.unmount()
 
     expect((await $.command.run({ command: 'context-bar', args: '' } as any)).text).toBe('Context bar on')
     expect(store.isHidden).toBe(false)
-    band = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', ...BAND } as any)
+    band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
     expect(await band.find({ type: 'Text', text: /of 1M/ })).toBeDefined()
     await band.unmount()
   })
@@ -143,8 +143,10 @@ describe('context-bar', () => {
     engine(on, { isHidden: true })
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
-    const band = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', ...BAND } as any)
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
     expect(await band.find({ type: 'Text', text: /of 1M/ })).toBeUndefined()
     await band.unmount()
+    // the stored choice was loaded, not just left unset, so the next toggle shows it
+    expect((await $.command.run({ command: 'context-bar', args: '' } as any)).text).toBe('Context bar on')
   })
 })
