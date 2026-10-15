@@ -11,6 +11,6 @@ export type Reading = {
 declare module 'claude-code' {
   // Keyed by the manifest's name: the host lets only that owner write these values.
   interface PluginState {
-    'ctx-bar':{ reading: Reading | null; isHidden: boolean }
+    'ctx-bar': { reading: Reading | null; isHidden: boolean }
   }
 }
