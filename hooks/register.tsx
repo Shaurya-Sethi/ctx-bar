@@ -17,9 +17,10 @@ const FREE = '#808080' // a mid grey thin line reads as empty on dark and light 
 const BUFFER = '#808080'
 const GLYPH = { used: '█', free: '─', buffer: '░' } as const
 
-// Held by the host, so the bar survives a hot reload of this file.
-const reading = atom({ plugin: 'context-bar', key: 'reading' } as const, null as Reading | null)
-const isHidden = atom({ plugin: 'context-bar', key: 'isHidden' } as const, false)
+// Held by the host, so the bar survives a hot reload of this file. The owner must be the
+// manifest's name ('ctx-bar'): the host lets only a value's owner write it.
+const reading = atom({ plugin: 'ctx-bar', key: 'reading' } as const, null as Reading | null)
+const isHidden = atom({ plugin: 'ctx-bar', key: 'isHidden' } as const, false)
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
