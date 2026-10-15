@@ -19,6 +19,9 @@ const MESSAGES = '#d97757' // the row that grows, in the accent color
 const FREE = '#808080' // a mid grey thin line reads as empty on dark and light themes alike
 const BUFFER = '#808080'
 const GLYPH = { used: '█', free: '─', buffer: '░' } as const
+// An appended row reaches the in-memory transcript one tick after its append resolves
+// (measured on Claude Code 2.1.300); a 1ms timer runs after that tick.
+const AFTER_APPEND_MS = 1
 
 // Held by the host, so the bar survives a hot reload of this file. The owner must be the
 // manifest's name ('ctx-bar'), written as a literal in each ref: `claude plugin validate`
@@ -36,13 +39,16 @@ export const register: Register = on => {
     return r
   })
 
-  // Every row the main conversation keeps changes what the window holds. The refresh runs in
-  // the background, so a slow estimate never holds up the append, and a failing hook still
-  // lets the row through (the handler replays what next settled to, or runs it).
+  // Every row the main conversation keeps changes what the window holds. The append resolves
+  // once the row is stored, but Claude Code installs it in the in-memory transcript the estimate
+  // reads only a tick later, so a refresh right here would measure the window one row behind.
+  // A timer past that tick waits for the install; it also keeps a slow estimate from holding up
+  // the append, and a failing hook still lets the row through (the handler replays what next
+  // settled to, or runs it).
   on('session.append', async ($, e, next) => {
     const r = await next(e)
     // A subagent's rows fill its own window; queue records and notices are never in the model's.
-    if (!e.agentId && e.door !== 'queue' && e.door !== 'notice') void scheduleRefresh($)
+    if (!e.agentId && e.door !== 'queue' && e.door !== 'notice') $.clock.after(AFTER_APPEND_MS, () => void scheduleRefresh($))
     return r
   }).catch(($, e, next) => next(e))
 
