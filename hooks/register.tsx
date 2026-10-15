@@ -230,8 +230,10 @@ export function legend(r: Reading, width: number) {
   return lines.filter(l => l.length > 0)
 }
 
+// Compact token count: '950', '3.4k', '186k', '1.2M'. Values that round to 1000k (from 999_500)
+// already read as a million, so the M branch starts there.
 export function tokens(n: number) {
-  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
+  if (n >= 999_500) return `${+(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
   if (n >= 10_000) return `${Math.round(n / 1000)}k`
   if (n >= 1000) return `${+(n / 1000).toFixed(1)}k`
   return String(n)
