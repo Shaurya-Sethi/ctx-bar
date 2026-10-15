@@ -59,6 +59,8 @@ describe('context-bar', () => {
     expect(tokens(3_400)).toBe('3.4k')
     expect(tokens(186_000)).toBe('186k')
     expect(tokens(1_000_000)).toBe('1M')
+    expect(tokens(999_499)).toBe('999k')
+    expect(tokens(999_600)).toBe('1M') // rounds up to a million, never '1000k'
     expect(tokens(950)).toBe('950')
     expect(share(3_400, 1_000_000)).toBe('0.3%')
     expect(share(186_000, 1_000_000)).toBe('19%')
