@@ -32,19 +32,24 @@ const BREAKDOWN = {
 }
 
 // Stands for the engine beneath the mod.
+// `live` is the window as the engine would estimate it now; a read waits `delay` ms before answering.
 function engine(on: any, store: Record<string, unknown> = {}) {
   const asked: unknown[] = []
+  const live = { total: 204_000, delay: 0 }
   on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
   on('command.register', () => ({ value: undefined }))
   on('turn.complete', () => ({ text: '' }))
   on('store.get', (_$: any, e: any) => ({ value: store[e.key] }))
   on('store.set', (_$: any, e: any) => ((store[e.key] = e.value), { value: undefined }))
-  on('session.usage', (_$: any, e: any) => {
+  on('session.usage', async (_$: any, e: any) => {
     asked.push(e)
-    return { value: { startedAt: 0, context: { tokens: 204_000, window: 1_000_000, percent: 20, breakdown: BREAKDOWN }, rateLimits: {}, cost: { usd: 0 } } }
+    const { total, delay } = live // read now, answered after the delay, as a slow estimate would be
+    if (delay) await new Promise(done => (globalThis as any).setTimeout(done, delay))
+    const breakdown = { ...BREAKDOWN, totalTokens: total, percentage: Math.round(total / 10_000) }
+    return { value: { startedAt: 0, context: { tokens: total, window: 1_000_000, percent: breakdown.percentage, breakdown }, rateLimits: {}, cost: { usd: 0 } } }
   })
   on('ui.render', ($: any, e: any) => $.ui.resolve(e).Text({ children: 'band below' }))
-  return { asked, store }
+  return { asked, store, live }
 }
 
 const settle = () => new Promise(done => (globalThis as any).setTimeout(done, 20)) // the first refresh runs in the background
@@ -110,6 +115,46 @@ describe('context-bar', () => {
     expect(asked.length).toBe(1)
     await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1 } as any)
     expect(asked.length).toBe(2)
+  })
+
+  test('grows with each row the main conversation keeps, before the turn ends', async ($, on) => {
+    const { asked, live } = engine(on)
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+    await settle()
+    live.total = 216_000
+    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'a row' }] } } as any)
+    await settle()
+    expect(asked.length).toBe(2)
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
+    expect(await band.find({ type: 'Text', text: /216k of 1M/ })).toBeDefined()
+    await band.unmount()
+  })
+
+  test('a row a subagent keeps does not refresh the bar', async ($, on) => {
+    const { asked } = engine(on)
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+    await settle()
+    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: 'a row' }] }, agentId: 'a1' } as any)
+    await settle()
+    expect(asked.length).toBe(1)
+  })
+
+  test('a burst of rows leaves the newest reading, not a slower older one', async ($, on) => {
+    const { live } = engine(on)
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+    await settle()
+    live.total = 210_000
+    live.delay = 40 // this read is slow
+    const row = { message: { type: 'user', content: [{ type: 'text', text: 'a row' }] } } as any
+    await $.session.append(row)
+    live.total = 230_000
+    live.delay = 0 // the next ones are fast, so without care they land before the slow one
+    await $.session.append(row)
+    await $.session.append(row)
+    await new Promise(done => (globalThis as any).setTimeout(done, 100))
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
+    expect(await band.find({ type: 'Text', text: /230k of 1M/ })).toBeDefined()
+    await band.unmount()
   })
 
   test('refreshes after a compaction', async ($, on) => {

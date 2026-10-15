@@ -1,8 +1,10 @@
 // Context Bar: what is filling my context window?
 //   Above the prompt, the window as one stacked bar, a color per category as /context
 //   draws them (system prompt, tools, MCP tools, memory files, skills, messages, free),
-//   with a legend of tokens and shares and where auto-compaction runs. It refreshes after
-//   each turn. /context-bar shows or hides it, and the choice is kept across sessions.
+//   with a legend of tokens and shares and where auto-compaction runs. It refreshes as the
+//   main conversation keeps each row (prompt, response, tool result, compaction), so it
+//   grows steadily within a turn. /context-bar shows or hides it, and the choice is kept
+//   across sessions.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -29,26 +31,35 @@ export const register: Register = on => {
     await $.command.register({ name: 'context-bar', description: 'Show or hide the context window bar above the prompt' }).catch(() => {}) // a name Claude Code already has is refused: start anyway
     const hidden = (await $.store.get('isHidden').catch(() => undefined)) === true
     await update($, isHidden, () => hidden)
-    void refresh($).catch(() => {})
+    void scheduleRefresh($)
     return r
   })
 
+  // Every row the main conversation keeps changes what the window holds. The refresh runs in
+  // the background, so a slow estimate never holds up the append, and a failing hook still
+  // lets the row through (the handler replays what next settled to, or runs it).
+  on('session.append', async ($, e, next) => {
+    const r = await next(e)
+    if (!e.agentId) void scheduleRefresh($) // a subagent's rows fill its own window, not this one
+    return r
+  }).catch(($, e, next) => next(e))
+
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId) await refresh($).catch(() => {}) // a subagent's turn fills its own window, not this one
+    if (!e.agentId) await scheduleRefresh($) // a subagent's turn fills its own window, not this one
     return r
   })
 
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId && 'messages' in r) void refresh($).catch(() => {}) // a /compact empties the window without a turn ending
+    if (!e.agentId && 'messages' in r) void scheduleRefresh($) // a /compact empties the window without a turn ending
     return r
   })
 
   on('command.run', { command: 'context-bar' }, async $ => {
     const hidden = await update($, isHidden, h => !h)
     await $.store.set('isHidden', hidden).catch(() => {})
-    if (!hidden) await refresh($).catch(() => {})
+    if (!hidden) await scheduleRefresh($)
     return { text: hidden ? 'Context bar hidden. /context-bar shows it again' : 'Context bar on' }
   })
 
@@ -99,6 +110,27 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+// One refresh at a time: a request while one runs marks the reading stale, and exactly one
+// more refresh follows. Concurrent reads could land out of order and leave an older total
+// over a newer one; this way the last reading drawn is always taken after the last request.
+// Resolves when the reading is current; never rejects (a failed estimate keeps the old one).
+let running: Promise<void> | undefined
+let isStale = false
+function scheduleRefresh($: EngineInterface): Promise<void> {
+  if (running) {
+    isStale = true
+    return running
+  }
+  running = (async () => {
+    do {
+      isStale = false
+      await refresh($).catch(() => {})
+    } while (isStale)
+    running = undefined
+  })()
+  return running
 }
 
 // Asks the engine for /context's breakdown, estimated locally (no token-count calls).
