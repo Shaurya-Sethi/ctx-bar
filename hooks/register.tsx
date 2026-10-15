@@ -40,7 +40,8 @@ export const register: Register = on => {
   // lets the row through (the handler replays what next settled to, or runs it).
   on('session.append', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId) void scheduleRefresh($) // a subagent's rows fill its own window, not this one
+    // A subagent's rows fill its own window; queue records and notices are never in the model's.
+    if (!e.agentId && e.door !== 'queue' && e.door !== 'notice') void scheduleRefresh($)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -116,6 +117,8 @@ export const register: Register = on => {
 // more refresh follows. Concurrent reads could land out of order and leave an older total
 // over a newer one; this way the last reading drawn is always taken after the last request.
 // Resolves when the reading is current; never rejects (a failed estimate keeps the old one).
+// The follow-up pass reuses the first caller's `$`: the engine refuses a module that keeps `$`
+// in a variable, so the newest caller's cannot be swapped in.
 let running: Promise<void> | undefined
 let isStale = false
 function scheduleRefresh($: EngineInterface): Promise<void> {

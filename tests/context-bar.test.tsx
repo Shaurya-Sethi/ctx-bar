@@ -32,10 +32,10 @@ const BREAKDOWN = {
 }
 
 // Stands for the engine beneath the mod.
-// `live` is the window as the engine would estimate it now; a read waits `delay` ms before answering.
+// `live` is the window as the engine would estimate it now; a read waits on `gate`, when set, before answering.
 function engine(on: any, store: Record<string, unknown> = {}) {
   const asked: unknown[] = []
-  const live = { total: 204_000, delay: 0 }
+  const live: { total: number; gate?: Promise<unknown> } = { total: 204_000 }
   on('session.start', (_$: any, e: any) => ({ sessionId: 's', cwd: e.cwd }))
   on('command.register', () => ({ value: undefined }))
   on('turn.complete', () => ({ text: '' }))
@@ -43,8 +43,8 @@ function engine(on: any, store: Record<string, unknown> = {}) {
   on('store.set', (_$: any, e: any) => ((store[e.key] = e.value), { value: undefined }))
   on('session.usage', async (_$: any, e: any) => {
     asked.push(e)
-    const { total, delay } = live // read now, answered after the delay, as a slow estimate would be
-    if (delay) await new Promise(done => (globalThis as any).setTimeout(done, delay))
+    const { total, gate } = live // read now, answered once the gate opens, as a slow estimate would be
+    if (gate) await gate
     const breakdown = { ...BREAKDOWN, totalTokens: total, percentage: Math.round(total / 10_000) }
     return { value: { startedAt: 0, context: { tokens: total, window: 1_000_000, percent: breakdown.percentage, breakdown }, rateLimits: {}, cost: { usd: 0 } } }
   })
@@ -143,15 +143,18 @@ describe('context-bar', () => {
     const { live } = engine(on)
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
+    let open!: () => void
     live.total = 210_000
-    live.delay = 40 // this read is slow
+    live.gate = new Promise<void>(done => (open = done)) // this read is slow
     const row = { message: { type: 'user', content: [{ type: 'text', text: 'a row' }] } } as any
     await $.session.append(row)
     live.total = 230_000
-    live.delay = 0 // the next ones are fast, so without care they land before the slow one
+    live.gate = undefined // the next ones are fast, so without care they land before the slow one
     await $.session.append(row)
     await $.session.append(row)
-    await new Promise(done => (globalThis as any).setTimeout(done, 100))
+    await settle()
+    open() // the slow read answers last
+    await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1 } as any) // resolves once the reading is current
     const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
     expect(await band.find({ type: 'Text', text: /230k of 1M/ })).toBeDefined()
     await band.unmount()
