@@ -133,11 +133,34 @@ describe('context-bar', () => {
     })
     await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
+    const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
     await $.session.append({ message: { type: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'output' }] } } as any)
+    await settle() // the row is installed by now; a refresh at resolve would have read 18k
+    await clock.advance(1) // the first re-read, right after the install tick
     await settle()
-    await clock.advance(100)
+    expect(await band.find({ type: 'Text', text: /23k of 1M/ })).toBeDefined()
+    await band.unmount()
+  })
+
+  // Host scheduling does not promise the install lands within a tick; a later re-read catches it.
+  test('a row installed late still reaches the bar before the next row', async ($, on) => {
+    const { live } = engine(on)
+    const clock = mock.clock(on)
+    live.total = 18_000
+    on('session.append', async (_$: any, e: any, next: any) => {
+      const r = await next(e)
+      void clock.sleep(100).then(() => (live.total = 22_600))
+      return r
+    })
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
     await settle()
     const band = await $.ui.mount({ plugin: 'ctx-bar', surface: 'terminal', ...BAND } as any)
+    await $.session.append({ message: { type: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'output' }] } } as any)
+    await clock.advance(1)
+    await settle()
+    expect(await band.find({ type: 'Text', text: /18k of 1M/ })).toBeDefined() // not installed yet
+    await clock.advance(300)
+    await settle()
     expect(await band.find({ type: 'Text', text: /23k of 1M/ })).toBeDefined()
     await band.unmount()
   })
